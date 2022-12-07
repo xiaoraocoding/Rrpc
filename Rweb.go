@@ -1,7 +1,9 @@
 package Rrpc
 
 import (
+	"Rrpc/render"
 	"fmt"
+	"html/template"
 	"log"
 	"net/http"
 )
@@ -12,10 +14,6 @@ type HandlerFunc func(ctx *Context)
 
 type MiddlewareFunc func(handlerFunc HandlerFunc) HandlerFunc
 
-type Context struct {
-	W http.ResponseWriter
-	R *http.Request
-}
 type router struct {
 	routerGroup []*routerGroup
 }
@@ -95,8 +93,9 @@ func (e *Engine) httpRequestHandle(w http.ResponseWriter, r *http.Request) {
 		if node != nil {
 			//路由匹配上了
 			ctx := &Context{
-				W: w,
-				R: r,
+				W:        w,
+				R:        r,
+				engineer: e,
 			}
 			handle, ok := group.handleFuncMap[node.routerName][ANY]
 			if ok {
@@ -125,12 +124,29 @@ func (e *Engine) httpRequestHandle(w http.ResponseWriter, r *http.Request) {
 
 type Engine struct {
 	router
+	funcMap    template.FuncMap
+	HTMLRender render.HTMLRender
 }
 
 func New() *Engine {
-	return &Engine{
-		router{},
+	engine := &Engine{
+		router: router{},
 	}
+	return engine
+}
+
+func (e *Engine) SetFuncMap(funcMap template.FuncMap) {
+	e.funcMap = funcMap
+}
+
+// LoadTemplateGlob 加载所有模板
+func (e *Engine) LoadTemplateGlob(pattern string) {
+	t := template.Must(template.New("").Funcs(e.funcMap).ParseGlob(pattern))
+	e.HTMLRender = render.HTMLRender{Template: t}
+}
+
+func (e *Engine) SetHtmlTemplate(t *template.Template) {
+	e.HTMLRender = render.HTMLRender{Template: t}
 }
 
 type routerGroup struct {

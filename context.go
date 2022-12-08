@@ -1,6 +1,7 @@
 package Rrpc
 
 import (
+	"Rrpc/binding"
 	"Rrpc/render"
 	"encoding/json"
 	"errors"
@@ -274,56 +275,77 @@ func (c *Context) FromFiles(name string) []*multipart.FileHeader {
 	return form.File[name]
 }
 
-func (c *Context) DealJson(data any) error {
-	body := c.R.Body
-	if c.R == nil || body == nil {
-		return errors.New("invalid request")
-	}
-	decoder := json.NewDecoder(body)
-	if c.DisallowUnknownFields {
-		decoder.DisallowUnknownFields()
-	}
-	if c.IsValidate {
-		err := validateRequireParam(data, decoder)
-		if err != nil {
-			return err
-		}
-	} else {
-		err := decoder.Decode(data)
-		if err != nil {
-			return err
-		}
+func (c *Context) BindJson(obj any) error {
+	jsonBinding := binding.JSON
+	jsonBinding.DisallowUnknownFields = c.DisallowUnknownFields
+	jsonBinding.IsValidate = c.IsValidate
+	return c.MustBindWith(obj, jsonBinding)
+	//body := c.R.Body
+	//if c.R == nil || body == nil {
+	//	return errors.New("invalid request")
+	//}
+	//decoder := json.NewDecoder(body)
+	//if c.DisallowUnknownFields {
+	//	decoder.DisallowUnknownFields()
+	//}
+	//if c.IsValidate {
+	//	err := validateRequireParam(data, decoder)
+	//	if err != nil {
+	//		return err
+	//	}
+	//} else {
+	//	err := decoder.Decode(data)
+	//	if err != nil {
+	//		return err
+	//	}
+	//}
+	//return validate(data)
+}
+
+func (c *Context) MustBindWith(obj any, b binding.Binding) error {
+	//如果发生错误，返回400状态码 参数错误
+	if err := c.ShouldBindWith(obj, b); err != nil {
+		c.W.WriteHeader(http.StatusBadRequest)
+		return err
 	}
 	return nil
 }
 
-func validateRequireParam(data any, decoder *json.Decoder) error {
-	if data == nil {
-		return nil
-	}
-	valueOf := reflect.ValueOf(data)
-	if valueOf.Kind() != reflect.Pointer {
-		return errors.New("no ptr type")
-	}
-	t := valueOf.Elem().Interface()
-	of := reflect.ValueOf(t)
-	switch of.Kind() {
-	case reflect.Struct:
-		return checkParam(of, data, decoder)
-	case reflect.Slice, reflect.Array:
-		elem := of.Type().Elem()
-		elemType := elem.Kind()
-		if elemType == reflect.Struct {
-			return checkParamSlice(elem, data, decoder)
-		}
-	default:
-		err := decoder.Decode(data)
-		if err != nil {
-			return err
-		}
-		return validate(data)
-	}
-	return nil
+func (c *Context) ShouldBindWith(obj any, b binding.Binding) error {
+	return b.Bind(c.R, obj)
+}
+
+//func validateRequireParam(data any, decoder *json.Decoder) error {
+//	if data == nil {
+//		return nil
+//	}
+//	valueOf := reflect.ValueOf(data)
+//	if valueOf.Kind() != reflect.Pointer {
+//		return errors.New("no ptr type")
+//	}
+//	t := valueOf.Elem().Interface()
+//	of := reflect.ValueOf(t)
+//	switch of.Kind() {
+//	case reflect.Struct:
+//		return checkParam(of, data, decoder)
+//	case reflect.Slice, reflect.Array:
+//		elem := of.Type().Elem()
+//		elemType := elem.Kind()
+//		if elemType == reflect.Struct {
+//			return checkParamSlice(elem, data, decoder)
+//		}
+//	default:
+//		err := decoder.Decode(data)
+//		if err != nil {
+//			return err
+//		}
+//		return validate(data)
+//	}
+//	return nil
+//}
+
+func (c *Context) BindXML(obj any) error {
+	return c.MustBindWith(obj, binding.XML)
 }
 
 type SliceValidationError []error
@@ -348,10 +370,6 @@ func (err SliceValidationError) Error() string {
 		}
 		return b.String()
 	}
-}
-
-func validate(obj any) error {
-	return Validator.ValidateStruct(obj)
 }
 
 func checkParam(of reflect.Value, obj any, decoder *json.Decoder) error {

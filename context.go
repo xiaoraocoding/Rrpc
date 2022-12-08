@@ -2,8 +2,10 @@ package Rrpc
 
 import (
 	"Rrpc/render"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/go-playground/validator/v10"
 	"html/template"
 	"io"
 	"log"
@@ -11,18 +13,21 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"reflect"
 	"strings"
 )
 
 const defaultMultipartMemory = 32 << 20 //32M
 
 type Context struct {
-	W          http.ResponseWriter
-	R          *http.Request
-	engineer   *Engine
-	StatusCode int
-	queryCache url.Values
-	formCache  url.Values
+	W                     http.ResponseWriter
+	R                     *http.Request
+	engineer              *Engine
+	StatusCode            int
+	queryCache            url.Values
+	formCache             url.Values
+	DisallowUnknownFields bool
+	IsValidate            bool
 }
 
 func (c *Context) initQueryCache() {
@@ -267,4 +272,127 @@ func (c *Context) FromFiles(name string) []*multipart.FileHeader {
 		return make([]*multipart.FileHeader, 0)
 	}
 	return form.File[name]
+}
+
+func (c *Context) DealJson(data any) error {
+	body := c.R.Body
+	if c.R == nil || body == nil {
+		return errors.New("invalid request")
+	}
+	decoder := json.NewDecoder(body)
+	if c.DisallowUnknownFields {
+		decoder.DisallowUnknownFields()
+	}
+	if c.IsValidate {
+		err := validateRequireParam(data, decoder)
+		if err != nil {
+			return err
+		}
+	} else {
+		err := decoder.Decode(data)
+		if err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func validateRequireParam(data any, decoder *json.Decoder) error {
+	if data == nil {
+		return nil
+	}
+	valueOf := reflect.ValueOf(data)
+	if valueOf.Kind() != reflect.Pointer {
+		return errors.New("no ptr type")
+	}
+	t := valueOf.Elem().Interface()
+	of := reflect.ValueOf(t)
+	switch of.Kind() {
+	case reflect.Struct:
+		return checkParam(of, data, decoder)
+	case reflect.Slice, reflect.Array:
+		elem := of.Type().Elem()
+		elemType := elem.Kind()
+		if elemType == reflect.Struct {
+			return checkParamSlice(elem, data, decoder)
+		}
+	default:
+		err := decoder.Decode(data)
+		if err != nil {
+			return err
+		}
+		return validate(data)
+	}
+	return nil
+}
+
+type SliceValidationError []error
+
+func (err SliceValidationError) Error() string {
+	n := len(err)
+	switch n {
+	case 0:
+		return ""
+	default:
+		var b strings.Builder
+		if err[0] != nil {
+			fmt.Fprintf(&b, "[%d]: %s", 0, err[0].Error())
+		}
+		if n > 1 {
+			for i := 1; i < n; i++ {
+				if err[i] != nil {
+					b.WriteString("\n")
+					fmt.Fprintf(&b, "[%d]: %s", i, err[i].Error())
+				}
+			}
+		}
+		return b.String()
+	}
+}
+
+func validate(obj any) error {
+	return Validator.ValidateStruct(obj)
+}
+
+func checkParam(of reflect.Value, obj any, decoder *json.Decoder) error {
+	mapData := make(map[string]interface{})
+	_ = decoder.Decode(&mapData)
+	for i := 0; i < of.NumField(); i++ {
+		field := of.Type().Field(i)
+		required := field.Tag.Get("msgo")
+		tag := field.Tag.Get("json")
+		value := mapData[tag]
+		if value == nil && required == "required" {
+			return errors.New(fmt.Sprintf("filed [%s] is required", tag))
+		}
+	}
+	marshal, _ := json.Marshal(mapData)
+	_ = json.Unmarshal(marshal, obj)
+	return nil
+}
+
+func validateStruct(obj any) error {
+	return validator.New().Struct(obj)
+}
+
+func checkParamSlice(elem reflect.Type, data any, decoder *json.Decoder) error {
+	mapData := make([]map[string]interface{}, 0)
+	_ = decoder.Decode(&mapData)
+	if len(mapData) <= 0 {
+		return nil
+	}
+	for i := 0; i < elem.NumField(); i++ {
+		field := elem.Field(i)
+		required := field.Tag.Get("msgo")
+		tag := field.Tag.Get("json")
+		value := mapData[0][tag] //这里只判断了第一个
+		if value == nil && required == "required" {
+			return errors.New(fmt.Sprintf("filed [%s] is required", tag))
+		}
+	}
+	if data != nil {
+		marshal, _ := json.Marshal(mapData)
+		_ = json.Unmarshal(marshal, data)
+	}
+	return nil
 }

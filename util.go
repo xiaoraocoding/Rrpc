@@ -1,6 +1,9 @@
 package Rrpc
 
-import "strings"
+import (
+	"strings"
+	"unicode"
+)
 
 func SubStringLast(str string, substr string) string {
 	//先查找有没有
@@ -10,4 +13,13 @@ func SubStringLast(str string, substr string) string {
 	}
 	len := len(substr)
 	return str[index+len:]
+}
+
+func isASCII(s string) bool {
+	for i := 0; i < len(s); i++ {
+		if s[i] > unicode.MaxASCII {
+			return false
+		}
+	}
+	return true
 }

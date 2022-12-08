@@ -2,18 +2,119 @@ package Rrpc
 
 import (
 	"Rrpc/render"
+	"errors"
 	"fmt"
 	"html/template"
+	"io"
 	"log"
+	"mime/multipart"
 	"net/http"
 	"net/url"
+	"os"
+	"strings"
 )
+
+const defaultMultipartMemory = 32 << 20 //32M
 
 type Context struct {
 	W          http.ResponseWriter
 	R          *http.Request
 	engineer   *Engine
 	StatusCode int
+	queryCache url.Values
+	formCache  url.Values
+}
+
+func (c *Context) initQueryCache() {
+	if c.queryCache == nil {
+		if c.R != nil {
+			c.queryCache = c.R.URL.Query()
+		} else {
+			c.queryCache = url.Values{}
+		}
+	}
+}
+
+func (c *Context) initFormCache() {
+	if c.formCache == nil {
+		c.formCache = make(url.Values)
+		req := c.R
+		if err := req.ParseMultipartForm(defaultMultipartMemory); err != nil {
+			if !errors.Is(err, http.ErrNotMultipart) {
+				log.Println(err)
+			}
+		}
+		c.formCache = c.R.PostForm
+	}
+}
+
+func (c *Context) GetPostForm(key string) (string, bool) {
+	if values, ok := c.GetPostFormArray(key); ok {
+		return values[0], ok
+	}
+	return "", false
+}
+
+func (c *Context) PostFormArray(key string) (values []string) {
+	values, _ = c.GetPostFormArray(key)
+	return
+}
+
+func (c *Context) GetPostFormArray(key string) (values []string, ok bool) {
+	c.initFormCache()
+	values, ok = c.formCache[key]
+	return
+}
+
+func (c *Context) GetPostFormMap(key string) (map[string]string, bool) {
+	c.initFormCache()
+	return c.get(c.formCache, key)
+}
+
+func (c *Context) PostFormMap(key string) (dicts map[string]string) {
+	dicts, _ = c.GetPostFormMap(key)
+	return
+}
+
+func (c *Context) GetQueryMap(key string) (map[string]string, bool) {
+	c.initQueryCache()
+	return c.get(c.queryCache, key)
+}
+
+func (c *Context) get(m map[string][]string, key string) (map[string]string, bool) {
+	//user[id]=1&user[name]=张三
+	dicts := make(map[string]string)
+	exist := false
+	for k, value := range m {
+		if i := strings.IndexByte(k, '['); i >= 1 && k[0:i] == key {
+			if j := strings.IndexByte(k[i+1:], ']'); j >= 1 {
+				exist = true
+				dicts[k[i+1:][:j]] = value[0]
+			}
+		}
+	}
+	return dicts, exist
+}
+
+// 获取单个值
+func (c *Context) GetQuery(key string) string {
+	c.initQueryCache()
+	return c.queryCache.Get(key)
+}
+
+// 获取全部值
+func (c *Context) GetQueryArray(key string) (values []string, ok bool) {
+	c.initQueryCache()
+	values, ok = c.queryCache[key]
+	return
+}
+
+func (c *Context) DefaultQuery(key, defaultValue string) string {
+	array, ok := c.GetQueryArray(key)
+	if !ok {
+		return defaultValue
+	}
+	return array[0]
 }
 
 func (c *Context) HTML(status int, html string) error {
@@ -115,4 +216,55 @@ func (c *Context) Render(statusCode int, r render.Render) error {
 	c.StatusCode = statusCode
 	//多次调用 WriteHeader 就会产生这样的警告 superfluous response.WriteHeader
 	return err
+}
+
+func (c *Context) QueryMap(key string) (dicts map[string]string) {
+	dicts, _ = c.GetQueryMap(key)
+	return
+}
+
+func (c *Context) FormFile(name string) (*multipart.FileHeader, error) {
+	req := c.R
+	if err := req.ParseMultipartForm(defaultMultipartMemory); err != nil {
+		return nil, err
+	}
+	file, header, err := req.FormFile(name)
+	if err != nil {
+		return nil, err
+	}
+	err = file.Close()
+	if err != nil {
+		return nil, err
+	}
+	return header, nil
+}
+
+func (c *Context) SaveUploadedFile(file *multipart.FileHeader, dst string) error {
+	src, err := file.Open()
+	if err != nil {
+		return err
+	}
+	defer src.Close()
+
+	out, err := os.Create(dst)
+	if err != nil {
+		return err
+	}
+	defer out.Close()
+
+	_, err = io.Copy(out, src)
+	return err
+}
+
+func (c *Context) MultipartForm() (*multipart.Form, error) {
+	err := c.R.ParseMultipartForm(defaultMultipartMemory)
+	return c.R.MultipartForm, err
+}
+
+func (c *Context) FromFiles(name string) []*multipart.FileHeader {
+	form, err := c.MultipartForm()
+	if err != nil {
+		return make([]*multipart.FileHeader, 0)
+	}
+	return form.File[name]
 }

@@ -91,7 +91,7 @@ func (r *routerGroup) methodHandle(name string, method string, h HandlerFunc, ct
 func (e *Engine) httpRequestHandle(ctx *Context, w http.ResponseWriter, r *http.Request) {
 	method := r.Method
 	for _, group := range e.routerGroup {
-		routerName := SubStringLast(r.RequestURI, "/"+group.name)
+		routerName := SubStringLast(r.URL.Path, "/"+group.name)
 		// get/1
 		node := group.treeNode.Get(routerName)
 		if node != nil {

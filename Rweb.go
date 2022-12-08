@@ -6,6 +6,7 @@ import (
 	"html/template"
 	"log"
 	"net/http"
+	"sync"
 )
 
 const ANY = "ANY"
@@ -63,8 +64,11 @@ func (r *routerGroup) Head(name string, handlerFunc HandlerFunc, middlewareFunc 
 }
 
 func (e *Engine) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	e.httpRequestHandle(w, r)
-
+	ctx := e.pool.Get().(*Context)
+	ctx.W = w
+	ctx.R = r
+	e.httpRequestHandle(ctx, w, r)
+	e.pool.Put(ctx)
 }
 
 func (r *routerGroup) methodHandle(name string, method string, h HandlerFunc, ctx *Context) {
@@ -84,19 +88,13 @@ func (r *routerGroup) methodHandle(name string, method string, h HandlerFunc, ct
 	h(ctx)
 }
 
-func (e *Engine) httpRequestHandle(w http.ResponseWriter, r *http.Request) {
+func (e *Engine) httpRequestHandle(ctx *Context, w http.ResponseWriter, r *http.Request) {
 	method := r.Method
 	for _, group := range e.routerGroup {
 		routerName := SubStringLast(r.RequestURI, "/"+group.name)
 		// get/1
 		node := group.treeNode.Get(routerName)
 		if node != nil {
-			//路由匹配上了
-			ctx := &Context{
-				W:        w,
-				R:        r,
-				engineer: e,
-			}
 			handle, ok := group.handleFuncMap[node.routerName][ANY]
 			if ok {
 				group.methodHandle(node.routerName, ANY, handle, ctx)
@@ -126,13 +124,23 @@ type Engine struct {
 	router
 	funcMap    template.FuncMap
 	HTMLRender render.HTMLRender
+	pool       sync.Pool
 }
 
 func New() *Engine {
 	engine := &Engine{
-		router: router{},
+		router:     router{},
+		funcMap:    nil,
+		HTMLRender: render.HTMLRender{},
+	}
+	engine.pool.New = func() any {
+		return engine.allocateContext()
 	}
 	return engine
+}
+
+func (e *Engine) allocateContext() any {
+	return &Context{engineer: e}
 }
 
 func (e *Engine) SetFuncMap(funcMap template.FuncMap) {

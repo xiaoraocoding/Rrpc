@@ -2,6 +2,7 @@ package Rrpc
 
 import (
 	"encoding/json"
+	"encoding/xml"
 	"html/template"
 	"log"
 	"net/http"
@@ -69,6 +70,20 @@ func (c *Context) JSON(status int, data any) error {
 		return err
 	}
 	_, err = c.W.Write(rsp)
+	if err != nil {
+		return err
+	}
+	return nil
+}
+
+func (c *Context) XML(status int, data any) error {
+	c.W.Header().Set("Content-Type", "application/xml; charset=utf-8")
+	c.W.WriteHeader(status)
+	res, err := xml.Marshal(data)
+	if err != nil {
+		return err
+	}
+	_, err = c.W.Write(res)
 	if err != nil {
 		return err
 	}
